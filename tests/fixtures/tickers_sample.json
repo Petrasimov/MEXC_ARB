@@ -1,0 +1,17 @@
+[
+  {"symbol": "USDCUSDT", "quoteVolume": "500000000"},
+  {"symbol": "BTCUSDT",  "quoteVolume": "900000000"},
+  {"symbol": "ETHUSDT",  "quoteVolume": "700000000"},
+  {"symbol": "SOLUSDT",  "quoteVolume": "300000000"},
+  {"symbol": "XRPUSDT",  "quoteVolume": "150000000"},
+  {"symbol": "DOGEUSDT", "quoteVolume": "120000000"},
+  {"symbol": "ADAUSDT",  "quoteVolume": "80000000"},
+  {"symbol": "BTCUSDC",  "quoteVolume": "40000000"},
+  {"symbol": "ETHUSDC",  "quoteVolume": "30000000"},
+  {"symbol": "SOLUSDC",  "quoteVolume": "20000000"},
+  {"symbol": "XRPUSDC",  "quoteVolume": "10000000"},
+  {"symbol": "ETHBTC",   "quoteVolume": "25000000"},
+  {"symbol": "SOLBTC",   "quoteVolume": "15000000"},
+  {"symbol": "DOGEBTC",  "quoteVolume": "9000000"},
+  {"symbol": "JUNKUSDT", "quoteVolume": "5000"}
+]

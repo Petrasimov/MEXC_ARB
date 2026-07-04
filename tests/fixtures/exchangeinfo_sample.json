@@ -1,0 +1,23 @@
+{
+  "symbols": [
+    {"symbol": "USDCUSDT", "status": "1", "baseAsset": "USDC", "quoteAsset": "USDT", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "BTCUSDT",  "status": "1", "baseAsset": "BTC",  "quoteAsset": "USDT", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "ETHUSDT",  "status": "1", "baseAsset": "ETH",  "quoteAsset": "USDT", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "SOLUSDT",  "status": "1", "baseAsset": "SOL",  "quoteAsset": "USDT", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "XRPUSDT",  "status": "1", "baseAsset": "XRP",  "quoteAsset": "USDT", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "DOGEUSDT", "status": "1", "baseAsset": "DOGE", "quoteAsset": "USDT", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "ADAUSDT",  "status": "1", "baseAsset": "ADA",  "quoteAsset": "USDT", "isSpotTradingAllowed": true, "takerCommission": "0"},
+
+    {"symbol": "BTCUSDC",  "status": "1", "baseAsset": "BTC",  "quoteAsset": "USDC", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "ETHUSDC",  "status": "1", "baseAsset": "ETH",  "quoteAsset": "USDC", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "SOLUSDC",  "status": "1", "baseAsset": "SOL",  "quoteAsset": "USDC", "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "XRPUSDC",  "status": "1", "baseAsset": "XRP",  "quoteAsset": "USDC", "isSpotTradingAllowed": true, "takerCommission": "0"},
+
+    {"symbol": "ETHBTC",   "status": "1", "baseAsset": "ETH",  "quoteAsset": "BTC",  "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "SOLBTC",   "status": "1", "baseAsset": "SOL",  "quoteAsset": "BTC",  "isSpotTradingAllowed": true, "takerCommission": "0"},
+    {"symbol": "DOGEBTC",  "status": "1", "baseAsset": "DOGE", "quoteAsset": "BTC",  "isSpotTradingAllowed": true, "takerCommission": "0"},
+
+    {"symbol": "SCAMUSDT", "status": "2", "baseAsset": "SCAM", "quoteAsset": "USDT", "isSpotTradingAllowed": false, "takerCommission": "0.002"},
+    {"symbol": "JUNKUSDT", "status": "1", "baseAsset": "JUNK", "quoteAsset": "USDT", "isSpotTradingAllowed": true, "takerCommission": "0.001"}
+  ]
+}
