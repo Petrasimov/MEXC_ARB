@@ -61,7 +61,8 @@ tests/       fixtures со снапшотами exchangeInfo / ticker
 ## Дорожная карта (текущий статус)
 
 1. ✅ REST-коннектор + отбор пар + треугольники
-2. ⬜ protobuf WebSocket + локальные книги (`book_manager`)
+2. ✅ protobuf WebSocket + локальные книги (book_manager, order_book, depth_decoder)
+
 3. ⬜ Реактивный сканер (индекс symbol→треугольники уже есть в `core.triangles`)
 4. ⬜ Отчётность: rich-таблица + Google Sheets
 5. ⬜ Telegram-пульт на кнопках
