@@ -52,9 +52,9 @@ core/        чистая логика (без сети): models, triangles, vwa
 connectors/  auth (подпись), mexc_rest (REST-клиент, публичные эндпоинты)
 engine/      pair_selector (отбор пар) — ГОТОВО; далее: book_manager, scanner, executor, risk
 infra/       logging_conf (логи с тегами), config (конфиг + RuntimeState)
-reporting/   веха 4: terminal_table (rich), sheets (gspread)
+reporting/   snapshot (строки таблицы), terminal_table (rich), sheets (gspread), reporter (общий) — ГОТОВО
 control/     веха 5: telegram_bot (aiogram, кнопки)
-scripts/     demo_pair_selection — офлайн-проверка вехи 1
+scripts/     demo_* — офлайн-проверки вех 1-4
 tests/       fixtures со снапшотами exchangeInfo / ticker
 ```
 
@@ -62,26 +62,44 @@ tests/       fixtures со снапшотами exchangeInfo / ticker
 
 1. ✅ REST-коннектор + отбор пар + треугольники
 2. ✅ protobuf WebSocket + локальные книги (book_manager, order_book, depth_decoder)
-
-3. ⬜ Реактивный сканер (индекс symbol→треугольники уже есть в `core.triangles`)
-4. ⬜ Отчётность: rich-таблица + Google Sheets
+3. ✅ Реактивный сканер (scanner) + метрики скорости (infra/metrics.py, p50/p95/p99)
+4. ✅ Отчётность: rich-таблица (reporting/terminal_table) + Google Sheets (reporting/sheets)
 5. ⬜ Telegram-пульт на кнопках
 6. ⬜ Live-исполнитель (FOK) + риск-модуль
+
+## protobuf (важно при перекомпиляции схем)
+
+Схемы MEXC скомпилированы в `connectors/proto/*_pb2.py` из `mexcdevelop/websocket-proto`.
+Сгенерированные файлы MEXC используют «плоские» импорты (`import X_pb2`), из-за чего
+Python не видит их как пакет. Поэтому после КАЖДОЙ перекомпиляции нужно:
+  1. убедиться, что в `connectors/proto/` есть `__init__.py`;
+  2. поправить импорты на пакетные одной командой:
+     `python -c "import re,glob; [open(f,'w',encoding='utf-8').write(re.sub(r'^import (\w+_pb2)', r'from . import \1', open(f,encoding='utf-8').read(), flags=re.M)) for f in glob.glob('connectors/proto/*_pb2.py')]"`
+  3. проверить: `python -c "from connectors.depth_decoder import _PROTO_OK; print(_PROTO_OK)"` → должно быть `True`.
+
+Если `_PROTO_OK=False`, декодер молча падает на заглушку (dict) — живые книги читаться не будут.
 
 ## Как запускать и проверять
 
 ```bash
-python -m scripts.demo_pair_selection   # офлайн-проверка отбора пар и спреда
+python -m scripts.demo_pair_selection   # веха 1: отбор пар и спред
+python -m scripts.demo_book_manager     # веха 2: книги, версии, пересинхронизация
+python -m scripts.demo_scanner          # веха 3: реактивный сканер + метрики
+python -m scripts.demo_reporter         # веха 4: снапшот, терминал, Google Sheets
 ```
 
-Сеть в среде разработки может быть недоступна — логику ядра и отбора проверяем на
-фикстурах, REST/WS-код проверяется на живом MEXC при деплое.
+Сеть в среде разработки может быть недоступна — логику ядра, книг, сканера и
+отчётности проверяем на синтетике/фикстурах, REST/WS-код — на живом MEXC при деплое.
+Библиотеки `rich`/`gspread` при отсутствии заменяются фолбэком (текст/режим «отключено»).
 
 ## Ключевые файлы для быстрого старта
 
 - `core/triangles.py` — как строятся связки и индекс для реактивного пересчёта.
 - `core/spread.py` — как считается net/gross спред с вычетом комиссий.
 - `engine/pair_selector.py` — как отбираются пары (фильтр статуса, требование моста, ранжирование).
+- `engine/scanner.py` — реактивный пересчёт затронутых связок + сигналы.
+- `connectors/depth_decoder.py` — единственный модуль с protobuf (см. раздел protobuf).
+- `reporting/reporter.py` — общий репортёр (терминал + Google Sheets), читает RuntimeState.
 - `infra/config.py` — все настройки и `RuntimeState` (им управляет Telegram).
 
 ## Чего не делать
