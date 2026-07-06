@@ -50,7 +50,7 @@
 ```
 core/        чистая логика (без сети): models, triangles, vwap, spread — ГОТОВО
 connectors/  auth (подпись), mexc_rest (REST-клиент, публичные эндпоинты)
-engine/      pair_selector (отбор пар) — ГОТОВО; далее: book_manager, scanner, executor, risk
+engine/      pair_selector, order_book, book_manager, scanner, executor (FOK), risk — ГОТОВО
 infra/       logging_conf (логи с тегами), config (конфиг + RuntimeState)
 reporting/   snapshot (строки таблицы), terminal_table (rich), sheets (gspread), reporter (общий) — ГОТОВО
 control/     panel (текст+валидация), keyboard (кнопки), states (FSM), telegram_bot (aiogram) — ГОТОВО
@@ -65,7 +65,7 @@ tests/       fixtures со снапшотами exchangeInfo / ticker
 3. ✅ Реактивный сканер (scanner) + метрики скорости (infra/metrics.py, p50/p95/p99)
 4. ✅ Отчётность: rich-таблица (reporting/terminal_table) + Google Sheets (reporting/sheets)
 5. ✅ Telegram-пульт на кнопках (control/: panel, keyboard, states, telegram_bot; ручной ввод, подтверждение LIVE)
-6. ⬜ Live-исполнитель (FOK) + риск-модуль
+6. ✅ Live-исполнитель (engine/executor, FOK) + риск-модуль (engine/risk) + главный цикл (scripts/run.py)
 
 ## protobuf (важно при перекомпиляции схем)
 
@@ -87,6 +87,8 @@ python -m scripts.demo_book_manager     # веха 2: книги, версии, 
 python -m scripts.demo_scanner          # веха 3: реактивный сканер + метрики
 python -m scripts.demo_reporter         # веха 4: снапшот, терминал, Google Sheets
 python -m scripts.demo_telegram         # веха 5: рендер пульта + валидация ввода
+python -m scripts.demo_executor         # веха 6: исполнитель (dry) + риск-модуль
+python -m scripts.run                   # ЗАПУСК бота (dry по умолчанию; live — только с ключами + LIVE в Telegram)
 ```
 
 Сеть в среде разработки может быть недоступна — логику ядра, книг, сканера и
