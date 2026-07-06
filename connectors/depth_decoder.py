@@ -5,21 +5,20 @@ connectors/depth_decoder.py — декодер depth-фреймов MEXC (Protoc
 работают с чистой структурой DepthUpdate. Так protobuf-специфика не «протекает»
 в логику книг — её легко тестировать и при желании заменить.
 
-┌─ ЧТО СДЕЛАТЬ ЛОКАЛЬНО (там, где есть интернет) ─────────────────────────────┐
-│ 1. Склонировать схемы:                                                      │
-│      git clone https://github.com/mexcdevelop/websocket-proto               │
-│ 2. Скомпилировать в Python (нужен protoc или grpcio-tools):                 │
-│      python -m grpc_tools.protoc -I websocket-proto \                       │
-│              --python_out=connectors/proto websocket-proto/*.proto          │
-│ 3. Появятся файлы *_pb2.py в connectors/proto/. Тогда:                      │
-│      - раскомментировать блок РЕАЛЬНОГО ДЕКОДЕРА ниже;                       │
-│      - удалить/оставить заглушку _decode_stub как фолбэк.                    │
-└─────────────────────────────────────────────────────────────────────────────┘
+Схемы (из mexcdevelop/websocket-proto) уже скомпилированы в connectors/proto/*_pb2.py.
+Точная структура (проверено по .proto):
+  PushDataV3ApiWrapper:
+    - channel   (string, поле 1)      — имя канала
+    - symbol    (string, поле 3)      — торговая пара
+    - oneof body -> publicAggreDepths (поле 313) — тело depth-канала
+  PublicAggreDepthsV3Api:
+    - asks[] / bids[] (PublicAggreDepthV3ApiItem)
+    - fromVersion / toVersion (СТРОКИ! приводим к int)
+  PublicAggreDepthV3ApiItem:
+    - price / quantity (СТРОКИ! приводим к float)
 
-Формат MEXC (канал spot@public.aggre.depth.v3.api.pb@100ms@SYMBOL):
-обёртка PushDataV3ApiWrapper содержит publicAggreDepths с полями:
-  - asks[] / bids[]: элементы с price и quantity (строки);
-  - fromVersion / toVersion: границы версий инкремента.
+Важно: тело выбирается через oneof, поэтому проверяем WhichOneof('body'),
+а не HasField.
 """
 
 from __future__ import annotations
@@ -45,30 +44,73 @@ class DepthUpdate:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# РЕАЛЬНЫЙ ДЕКОДЕР (раскомментировать после компиляции .proto).
+# РЕАЛЬНЫЙ ДЕКОДЕР protobuf.
+# Импорт обёрнут в try/except: если по какой-то причине _pb2 недоступны
+# (напр. не скомпилированы), модуль всё равно импортируется и работает
+# заглушка decode_dict — это удобно для офлайн-тестов логики книг.
 # ─────────────────────────────────────────────────────────────────────────────
-# from connectors.proto import PushDataV3ApiWrapper_pb2 as pb
-#
-# def decode(raw: bytes) -> Optional[DepthUpdate]:
-#     """Десериализует бинарный фрейм MEXC в DepthUpdate."""
-#     wrapper = pb.PushDataV3ApiWrapper()
-#     wrapper.ParseFromString(raw)
-#     # Нужен только канал глубины; прочие типы (сделки и т.п.) пропускаем
-#     if not wrapper.HasField("publicAggreDepths"):
-#         return None
-#     d = wrapper.publicAggreDepths
-#     return DepthUpdate(
-#         symbol=wrapper.symbol,
-#         bids=[[float(x.price), float(x.quantity)] for x in d.bids],
-#         asks=[[float(x.price), float(x.quantity)] for x in d.asks],
-#         from_version=int(d.fromVersion),
-#         to_version=int(d.toVersion),
-#     )
+try:
+    from connectors.proto import PushDataV3ApiWrapper_pb2 as _pb
+    _PROTO_OK = True
+except Exception as e:                                # noqa: BLE001
+    log.warning("protobuf-схемы не загружены (%s) — доступна только заглушка", e)
+    _PROTO_OK = False
+
+
+def decode(raw) -> Optional[DepthUpdate]:
+    """
+    Единая точка входа декодера.
+    - bytes  -> разбор реальным protobuf-декодером (боевой путь);
+    - dict   -> заглушка decode_dict (для офлайн-тестов).
+    Возвращает DepthUpdate либо None, если сообщение не является depth-каналом.
+    """
+    if isinstance(raw, dict):
+        return decode_dict(raw)
+    if isinstance(raw, (bytes, bytearray)):
+        return _decode_bytes(bytes(raw))
+    log.warning("decode: неподдерживаемый тип %s", type(raw).__name__)
+    return None
+
+
+def _decode_bytes(raw: bytes) -> Optional[DepthUpdate]:
+    """Десериализует бинарный фрейм MEXC в DepthUpdate."""
+    if not _PROTO_OK:
+        log.warning("получены bytes, но protobuf-декодер не загружен")
+        return None
+    try:
+        wrapper = _pb.PushDataV3ApiWrapper()
+        wrapper.ParseFromString(raw)
+    except Exception as e:                            # noqa: BLE001
+        log.error("не удалось распарсить protobuf-фрейм: %s", e)
+        return None
+
+    # Нас интересует только канал глубины. Тело выбирается через oneof 'body'.
+    if wrapper.WhichOneof("body") != "publicAggreDepths":
+        return None                                   # другой канал (сделки и т.п.) — пропуск
+
+    d = wrapper.publicAggreDepths
+    try:
+        # price/quantity и версии приходят СТРОКАМИ — приводим к числам
+        bids = [[float(x.price), float(x.quantity)] for x in d.bids]
+        asks = [[float(x.price), float(x.quantity)] for x in d.asks]
+        from_version = int(d.fromVersion) if d.fromVersion else 0
+        to_version = int(d.toVersion) if d.toVersion else 0
+    except (TypeError, ValueError) as e:
+        log.error("%s: ошибка приведения типов depth: %s", wrapper.symbol, e)
+        return None
+
+    return DepthUpdate(
+        symbol=wrapper.symbol,
+        bids=bids,
+        asks=asks,
+        from_version=from_version,
+        to_version=to_version,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ЗАГЛУШКА для разработки без .proto: принимает уже готовый dict
-# (в такой же форме, как реальный декодер вернёт после компиляции).
+# ЗАГЛУШКА для разработки без сети: принимает уже готовый dict
+# (в такой же форме, как реальный декодер вернёт после разбора bytes).
 # Позволяет тестировать book_manager офлайн на синтетических данных.
 # ─────────────────────────────────────────────────────────────────────────────
 def decode_dict(msg: dict) -> Optional[DepthUpdate]:
@@ -87,16 +129,3 @@ def decode_dict(msg: dict) -> Optional[DepthUpdate]:
     except (KeyError, TypeError, ValueError) as e:
         log.error("не удалось разобрать сообщение: %s", e)
         return None
-
-
-# Единая точка входа. Сейчас указывает на заглушку; после компиляции .proto
-# переключить на реальный decode(raw: bytes).
-def decode(raw) -> Optional[DepthUpdate]:
-    """
-    Точка входа декодера. Пока raw — это dict (заглушка).
-    После компиляции .proto заменить тело на разбор bytes реальным декодером.
-    """
-    if isinstance(raw, dict):
-        return decode_dict(raw)
-    log.warning("получены bytes, но реальный protobuf-декодер ещё не включён")
-    return None
