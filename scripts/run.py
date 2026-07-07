@@ -1,20 +1,17 @@
 """
 scripts/run.py — главный цикл бота (точка входа для реального запуска).
 
-Связывает все слои в единый рабочий цикл:
-  REST (exchangeInfo/ticker) -> отбор пар и треугольников
-    -> REST-снапшоты стаканов -> локальные книги
-    -> WebSocket-инкременты -> реактивный сканер -> сигналы
-    -> риск-модуль -> исполнитель (dry/live)
-  параллельно: репортёр (терминал + Google Sheets) и Telegram-пульт.
+Новая архитектура (Часть A — отбор по СПРЕДУ, не по объёму):
+  REST exchangeInfo -> строим ВСЕ треугольники (движок pair_selector.build_all)
+    -> холодный скан по bookTicker: топ треугольников по спреду (cold_scanner)
+    -> WS-подписка на пары топа (динамическая, без разрыва)
+    -> depth-снапшоты пар топа -> локальные книги
+    -> WS-инкременты -> реактивный сканер -> сигналы -> риск -> исполнитель
+  фоново: РЕСКАНЕР каждые cfg.rescan_interval сек пересматривает топ и
+          переподписывает WS на разницу; параллельно репортёр и Telegram.
 
-Запуск (dry по умолчанию, безопасно):
-    python -m scripts.run
-
-Реальные ордера возможны ТОЛЬКО когда:
-  - в .env заданы MEXC_API_KEY/MEXC_API_SECRET;
-  - в Telegram включён режим LIVE (с подтверждением).
-Без ключей приватные запросы физически не уходят — dry-run полностью безопасен.
+Запуск (dry по умолчанию, безопасно): python -m scripts.run
+Реальные ордера — только с ключами в .env И режимом LIVE в Telegram.
 """
 
 from __future__ import annotations
@@ -26,7 +23,8 @@ from infra.config import Config, RuntimeState, START_ASSETS, BRIDGES
 from connectors.mexc_rest import MexcRestClient
 from connectors.mexc_ws import MexcWsClient
 from connectors.depth_decoder import DepthUpdate
-from engine.pair_selector import select_universe, parse_symbols, build_index
+from engine.pair_selector import build_all, parse_symbols, build_index
+from engine.cold_scanner import cold_scan
 from engine.book_manager import BookManager
 from engine.scanner import Scanner
 from engine.risk import RiskManager, RiskLimits
@@ -36,78 +34,93 @@ from reporting.sheets import SheetsReporter
 
 log = get_logger("APP")
 
+_DEPTH_LIMIT = 100          # глубина снапшота для пар топа (хватает для VWAP на разумную сумму)
+
 
 async def main() -> None:
     setup_logging()
     cfg = Config.from_env()
-    state = RuntimeState()          # dry по умолчанию, running=False до старта в Telegram
+    state = RuntimeState()
 
     async with MexcRestClient(cfg) as rest:
-        # 1. Отбор пар и построение треугольников
+        # 1. Все пары и ВСЕ треугольники (без ранжирования по объёму)
         exchange_info = await rest.exchange_info()
-        tickers = await rest.ticker_24hr()
         pairs = parse_symbols(exchange_info, cfg.default_taker_fee)
-        universe, triangles = select_universe(
-            pairs, tickers, list(START_ASSETS), list(BRIDGES), cfg.top_n
-        )
-        index = build_index(triangles)
-        symbols = [p.symbol for p in universe]
-        fee_by_symbol = {p.symbol: p.taker_fee for p in universe}
+        all_pairs, all_triangles = build_all(pairs, list(START_ASSETS), list(BRIDGES))
+        index = build_index(all_triangles)
+        fee_by_symbol = {p.symbol: p.taker_fee for p in all_pairs}
         fee_provider = lambda s: fee_by_symbol.get(s, cfg.default_taker_fee)
 
-        # 2. Книги + колбэк пересинхронизации через REST-снапшот
+        # 2. Холодный скан: выбираем топ треугольников по спреду
+        book_ticker = await rest.book_ticker()
+        cold = cold_scan(all_triangles, book_ticker, state.amount_usdt,
+                         fee_provider, cfg.top_n)
+        active_symbols = list(cold.symbols)
+
+        # 3. Книги + resync через REST-снапшот
         async def resync(symbol: str):
-            snap = await rest.depth(symbol, limit=5000)
+            snap = await rest.depth(symbol, limit=_DEPTH_LIMIT)
             return snap.get("bids", []), snap.get("asks", []), int(snap.get("lastUpdateId", 0))
 
-        books = BookManager(symbols, resync_cb=resync)
+        books = BookManager([p.symbol for p in all_pairs], resync_cb=resync)
 
-        # 3. Стартовые снапшоты стаканов (последовательно, чтобы не превысить лимиты)
-        for sym in symbols:
-            try:
-                snap = await rest.depth(sym, limit=5000)
-                books.init_book(sym, snap.get("bids", []), snap.get("asks", []),
-                                int(snap.get("lastUpdateId", 0)))
-            except Exception as e:                   # noqa: BLE001
-                log.error("не удалось загрузить снапшот %s: %s", sym, e)
+        # 4. Стартовые снапшоты только для пар топа
+        await _load_snapshots(rest, books, active_symbols)
 
-        # 4. Риск-модуль и исполнитель
+        # 5. Риск + исполнитель
         risk = RiskManager(RiskLimits(
-            max_amount_usdt=cfg.risk_max_amount,
-            cooldown_sec=cfg.risk_cooldown_sec,
-            max_trades_per_day=cfg.risk_max_trades_day,
-            daily_loss_limit_usdt=cfg.risk_daily_loss,
+            max_amount_usdt=cfg.risk_max_amount, cooldown_sec=cfg.risk_cooldown_sec,
+            max_trades_per_day=cfg.risk_max_trades_day, daily_loss_limit_usdt=cfg.risk_daily_loss,
         ))
         executor = Executor(rest, state, risk, slippage_pct=cfg.slippage_pct)
 
-        # 5. Сканер: на сигнал — планируем исполнение (только если мониторинг включён)
+        # 6. Сканер (на сигнал — исполнение, если мониторинг включён)
         def on_signal(sig):
             if state.running:
                 asyncio.create_task(executor.handle_signal(sig))
 
-        scanner = Scanner(
-            index=index, book_provider=books.snapshot_books, state=state,
-            fee_provider=fee_provider, anomaly_pct=cfg.anomaly_pct, on_signal=on_signal,
-        )
+        scanner = Scanner(index=index, book_provider=books.snapshot_books, state=state,
+                          fee_provider=fee_provider, anomaly_pct=cfg.anomaly_pct,
+                          on_signal=on_signal)
 
-        # 6. WS-обработчик: применяем обновление к книге и реактивно пересчитываем
+        # 7. WS-обработчик
         async def on_update(upd: DepthUpdate):
             await books.on_update(upd)
             if state.running:
                 scanner.on_symbol_update(upd.symbol)
 
-        ws = MexcWsClient(cfg.ws_base, symbols, on_update)
+        ws = MexcWsClient(cfg.ws_base, active_symbols, on_update)
 
-        # 7. Репортёр (терминал + Google Sheets, если заданы ключи)
-        sheets = SheetsReporter(
-            sheet_id=os.getenv("GOOGLE_SHEET_ID", ""),
-            sa_json=os.getenv("GOOGLE_SA_JSON", ""),
-        )
-        reporter = Reporter(triangles, books.snapshot_books, state, fee_provider,
-                            cfg.anomaly_pct, sheets=sheets, interval=1.5)
+        # 8. Репортёр показывает топ-треугольники (по холодному скану), обновляется в run
+        reporter_holder = {"triangles": cold.triangles}
+        sheets = SheetsReporter(sheet_id=os.getenv("GOOGLE_SHEET_ID", ""),
+                                sa_json=os.getenv("GOOGLE_SA_JSON", ""))
+        reporter = Reporter(reporter_holder["triangles"], books.snapshot_books, state,
+                            fee_provider, cfg.anomaly_pct, sheets=sheets, interval=1.5)
 
-        # 8. Telegram-пульт (если задан токен)
-        tasks = [ws.run(), reporter.run()]
+        # 9. Фоновый ресканер: пересматривает топ и переподписывает WS
+        async def rescanner():
+            while True:
+                await asyncio.sleep(cfg.rescan_interval)
+                try:
+                    bt = await rest.book_ticker()
+                    new_cold = cold_scan(all_triangles, bt, state.amount_usdt,
+                                         fee_provider, cfg.top_n)
+                    new_syms = set(new_cold.symbols)
+                    added = new_syms - ws.current_symbols()
+                    # Порядок важен: СНАЧАЛА подписываемся на WS (обновления начинают
+                    # копиться), ПОТОМ берём снапшот — так снапшот свежее первых
+                    # событий и книга continues без «дырки». Остаток чинит resync.
+                    await ws.set_symbols(list(new_syms))
+                    if added:
+                        await _load_snapshots(rest, books, list(added))
+                    # обновить набор треугольников в репортёре
+                    reporter.set_triangles(new_cold.triangles)
+                except Exception as e:                # noqa: BLE001
+                    log.error("ресканер: ошибка цикла: %s", e)
+
+        # 10. Telegram-пульт
+        tasks = [ws.run(), reporter.run(), rescanner()]
         token = os.getenv("TELEGRAM_BOT_TOKEN", "")
         chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
         if token and chat_id:
@@ -115,13 +128,24 @@ async def main() -> None:
             panel = TelegramPanel(token, int(chat_id), state)
             tasks.append(panel.start())
         else:
-            log.warning("Telegram не задан (нет токена) — работаем без пульта, "
-                        "мониторинг включаю автоматически")
+            log.warning("Telegram не задан — работаем без пульта, мониторинг включаю автоматически")
             state.running = True
 
-        log.info("бот запущен: %d пар, %d треугольников, режим=%s",
-                 len(symbols), len(triangles), state.mode)
+        log.info("бот запущен: всего треугольников %d, в топе %d, пар на WS %d, ресканер %.1fс, режим=%s",
+                 len(all_triangles), len(cold.triangles), len(active_symbols),
+                 cfg.rescan_interval, state.mode)
         await asyncio.gather(*tasks)
+
+
+async def _load_snapshots(rest, books, symbols: list) -> None:
+    """Последовательно грузит depth-снапшоты и инициализирует книги."""
+    for sym in symbols:
+        try:
+            snap = await rest.depth(sym, limit=_DEPTH_LIMIT)
+            books.init_book(sym, snap.get("bids", []), snap.get("asks", []),
+                            int(snap.get("lastUpdateId", 0)))
+        except Exception as e:                        # noqa: BLE001
+            log.error("не удалось загрузить снапшот %s: %s", sym, e)
 
 
 if __name__ == "__main__":

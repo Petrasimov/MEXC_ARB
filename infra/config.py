@@ -29,6 +29,7 @@ DEFAULT_RISK_MAX_AMOUNT = 1000.0     # максимум на одну связк
 DEFAULT_RISK_COOLDOWN_SEC = 5.0      # пауза между сделками, сек
 DEFAULT_RISK_MAX_TRADES_DAY = 50     # дневной лимит числа сделок
 DEFAULT_RISK_DAILY_LOSS = 50.0       # дневной лимит потерь, USDT
+DEFAULT_RESCAN_INTERVAL = 3.0        # период холодного пересмотра топа, сек
 
 # Стартовый актив (база капитала) и мосты для треугольников
 START_ASSETS = ["USDT"]
@@ -53,6 +54,7 @@ class Config:
     risk_cooldown_sec: float = DEFAULT_RISK_COOLDOWN_SEC
     risk_max_trades_day: int = DEFAULT_RISK_MAX_TRADES_DAY
     risk_daily_loss: float = DEFAULT_RISK_DAILY_LOSS
+    rescan_interval: float = DEFAULT_RESCAN_INTERVAL
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -67,6 +69,7 @@ class Config:
             risk_cooldown_sec=float(os.getenv("ARB_RISK_COOLDOWN", DEFAULT_RISK_COOLDOWN_SEC)),
             risk_max_trades_day=int(os.getenv("ARB_RISK_MAX_TRADES", DEFAULT_RISK_MAX_TRADES_DAY)),
             risk_daily_loss=float(os.getenv("ARB_RISK_DAILY_LOSS", DEFAULT_RISK_DAILY_LOSS)),
+            rescan_interval=float(os.getenv("ARB_RESCAN_INTERVAL", DEFAULT_RESCAN_INTERVAL)),
         )
 
 

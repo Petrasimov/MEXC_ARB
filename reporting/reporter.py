@@ -58,6 +58,10 @@ class Reporter:
             self._state.amount_usdt, self._fee, self._anomaly_pct,
         )
 
+    def set_triangles(self, triangles: list) -> None:
+        """Обновляет набор отображаемых треугольников (вызывает ресканер)."""
+        self._triangles = triangles
+
     async def run(self) -> None:
         """Основной цикл репортёра. Останавливается через stop()."""
         self._running = True

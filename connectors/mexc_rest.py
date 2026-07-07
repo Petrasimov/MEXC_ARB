@@ -79,6 +79,16 @@ class MexcRestClient:
         log.info("запрос ticker/24hr")
         return await self._get("/api/v3/ticker/24hr")
 
+    async def book_ticker(self) -> list:
+        """
+        Лучшие bid/ask с объёмами по ВСЕМ парам одним запросом (вес IP 10).
+        Основа холодного скана: top-of-book по всей бирже для оценки спреда.
+        Поля элемента: symbol, bidPrice, bidQty, askPrice, askQty.
+        """
+        log.info("запрос ticker/bookTicker (все пары)")
+        data = await self._get("/api/v3/ticker/bookTicker")
+        return data if isinstance(data, list) else [data]
+
     async def depth(self, symbol: str, limit: int = 5000) -> dict:
         """
         Снапшот стакана по паре. Нужен для инициализации локальной книги

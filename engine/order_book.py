@@ -66,7 +66,9 @@ class OrderBook:
 
         # Проверка непрерывности: не должно быть «дырки» в версиях
         if from_version != self.last_version + 1:
-            log.error("%s: РАЗРЫВ версий: ожидали %d, пришло from=%d (to=%d)",
+            # Штатно случается при подписке на новую пару (гонка снапшот/поток) —
+            # логируем на DEBUG, восстановление сделает book_manager (с rate-limit).
+            log.debug("%s: разрыв версий: ожидали %d, пришло from=%d (to=%d) — resync",
                       self.symbol, self.last_version + 1, from_version, to_version)
             self.ready = False
             return False

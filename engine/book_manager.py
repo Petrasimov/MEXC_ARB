@@ -12,6 +12,7 @@ book_manager НЕ знает про сеть и protobuf — только про
 """
 
 from __future__ import annotations
+import time
 from typing import Callable, Optional, Awaitable
 
 from .order_book import OrderBook
@@ -24,6 +25,10 @@ log = get_logger("BOOK")
 # Асинхронный, потому что реальный resync — это сетевой REST-запрос.
 ResyncCallback = Callable[[str], Awaitable[tuple]]
 
+# Минимальный интервал между пересинхронизациями одного символа (сек).
+# Защищает от «шторма» resync при добавлении новой пары (гонка снапшот/поток).
+_RESYNC_MIN_INTERVAL = 2.0
+
 
 class BookManager:
     """Набор локальных книг + логика пересинхронизации."""
@@ -33,6 +38,8 @@ class BookManager:
         self.books: dict[str, OrderBook] = {s: OrderBook(s) for s in symbols}
         # Колбэк для получения снапшота (задаётся снаружи; в тестах может быть None)
         self._resync_cb = resync_cb
+        # Время последней пересинхронизации по символу (для rate-limit)
+        self._last_resync: dict[str, float] = {}
         log.info("создан менеджер книг на %d символов", len(self.books))
 
     def has(self, symbol: str) -> bool:
@@ -42,11 +49,18 @@ class BookManager:
     async def on_update(self, upd: DepthUpdate) -> None:
         """
         Применяет одно обновление к нужной книге.
-        При разрыве версий инициирует пересинхронизацию через колбэк.
+        Если книга ещё не готова (ждёт снапшот) — тихо инициируем resync (с rate-limit),
+        не заваливая лог. При разрыве версий на готовой книге — тоже resync.
         """
         book = self.books.get(upd.symbol)
         if book is None:
             return                                   # символ не подписан — игнор
+
+        if not book.ready:
+            # Книга ещё не инициализирована/ждёт пересинхронизации — обновление
+            # применить нельзя, просто убеждаемся, что resync запланирован.
+            await self._resync(upd.symbol)
+            return
 
         ok = book.apply_update(upd.bids, upd.asks, upd.from_version, upd.to_version)
         if not ok and not book.ready:
@@ -54,11 +68,17 @@ class BookManager:
             await self._resync(upd.symbol)
 
     async def _resync(self, symbol: str) -> None:
-        """Пересинхронизация книги: тянем свежий снапшот через колбэк."""
+        """
+        Пересинхронизация книги через колбэк, НЕ чаще раза в _RESYNC_MIN_INTERVAL.
+        Rate-limit гасит «шторм» resync при гонке снапшот/поток на новых парах.
+        """
         if self._resync_cb is None:
-            log.warning("%s: разрыв версий, но resync-колбэк не задан", symbol)
             return
-        log.info("%s: пересинхронизация книги...", symbol)
+        now = time.monotonic()
+        last = self._last_resync.get(symbol, 0.0)
+        if now - last < _RESYNC_MIN_INTERVAL:
+            return                                   # недавно уже синхронизировали — ждём
+        self._last_resync[symbol] = now
         try:
             bids, asks, version = await self._resync_cb(symbol)
             self.books[symbol].init_from_snapshot(bids, asks, version)
